@@ -373,6 +373,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--t1);
 <script>
 'use strict';
 let DATA=null, curVenue=null, curRace=null, curSort='conf', curDir=-1;
+let curBabaMode=null; // null=実際の馬場のまま。'良'/'稍重'/'重'/'不良'を選ぶとトグル
 const $ = id => document.getElementById(id);
 const pct = v => v==null?'—':Number(v).toFixed(0);
 const f2  = v => v==null?'—':Number(v).toFixed(2);
@@ -697,6 +698,7 @@ function renderHeader(r){
         <div style="text-align:right">
           <button id="oddsRefreshBtn" onclick="refreshOdds()" style="background:var(--card);border:1px solid var(--border2);color:var(--t2);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;white-space:nowrap">🔄 オッズ更新</button>
           <div id="oddsRefreshStatus" style="font-size:9px;color:var(--t4);margin-top:3px"></div>
+          <div style="margin-top:5px">${babaToggleHtml(r)}</div>
         </div>
       </div>
       ${verdictHtml}${buyHtml}
@@ -1202,9 +1204,70 @@ function renderSortBar(){
 }
 
 // ─── SELECT RACE ────────────────────────────────────────────
+// ─── 馬場トグル ─────────────────────────────────────────────
+// 各馬のbaba_variants（良/稍重/重/不良ごとのconfidence_score/rank/is_keshi）から
+// 選んだ馬場の値を馬オブジェクトに上書きする。既存の描画コードは一切変更せず
+// h.confidence_rank / h.is_keshi 等をそのまま読むだけで動くようにするための仕組み。
+// 初回適用時に元の値を h._babaOrig に退避し、以後はそこから計算し直すことで
+// 「実際の馬場」に戻したときも正しく復元できるようにしている。
+// 馬場トグルのボタン群HTML。実測馬場(actual)＋良/稍重/重/不良の5択。
+// このレースにbaba_variantsデータが1頭も無ければ（旧predictions.json等）表示しない。
+function babaToggleHtml(r){
+  const hasVariants = (r.horses||[]).some(h => h.baba_variants && Object.keys(h.baba_variants).length);
+  if(!hasVariants) return '';
+  const opts = [
+    {key:'actual', label:`実際(${r.baba||'良'})`},
+    {key:'良',   label:'良'},
+    {key:'稍重', label:'稍重'},
+    {key:'重',   label:'重'},
+    {key:'不良', label:'不良'},
+  ];
+  const active = curBabaMode || 'actual';
+  return `<div style="display:inline-flex;gap:2px;background:var(--card);border:1px solid var(--border2);border-radius:6px;padding:2px" title="馬場状態を仮定して評価・消し馬判定を切り替えます（差し有利度の計算に反映）">
+    ${opts.map(o=>`<button onclick="setBabaMode('${o.key==='actual'?'':o.key}')"
+      style="border:none;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;
+      background:${active===o.key?'var(--orange)':'transparent'};
+      color:${active===o.key?'#1a0d00':'var(--t2)'};font-weight:${active===o.key?800:400}">${o.label}</button>`).join('')}
+  </div>`;
+}
+
+function applyBabaMode(race, mode){
+  if(!race || !race.horses) return;
+  for(const h of race.horses){
+    if(!h._babaOrig){
+      h._babaOrig = {
+        confidence_score: h.confidence_score,
+        confidence_rank:  h.confidence_rank,
+        is_keshi:         h.is_keshi,
+        keshi_reasons:    h.keshi_reasons,
+      };
+    }
+    if(!mode || mode === 'actual'){
+      Object.assign(h, h._babaOrig);
+    } else {
+      const v = (h.baba_variants || {})[mode];
+      if(v){
+        h.confidence_score = Math.round(v.confidence_score);
+        h.confidence_rank  = v.confidence_rank;
+        h.is_keshi          = v.is_keshi;
+        h.keshi_reasons     = v.keshi_reasons || [];
+      } else {
+        // このレースにbaba_variantsがない（旧データ等）場合は実測のまま
+        Object.assign(h, h._babaOrig);
+      }
+    }
+  }
+}
+
+function setBabaMode(mode){
+  curBabaMode = mode;
+  if(curRace) selectRace(curRace.race_id);
+}
+
 function selectRace(rid){
   curRace = DATA.races.find(r=>r.race_id===rid);
   if(!curRace) return;
+  applyBabaMode(curRace, curBabaMode);
   // 会場が違う場合はタブ切り替え（curRace更新後に呼ぶ）
   if(curRace.place !== window._navVenue){
     window._navVenue = curRace.place;
