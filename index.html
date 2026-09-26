@@ -432,15 +432,37 @@ function doSort(arr){ const s=[...arr].sort((a,b)=>sortKey(b)-sortKey(a)); retur
 
 // 厳選レース用: 3連単9点フォーメーション（1着固定→2着3頭→3着4頭）を計算する。
 // meets_filterでないレースにはnullを返す。renderHeader/renderRight両方から使う。
+//
+// [検証済み・ハイブリッド化] confidence_score軸とp_win軸を122R(meets_filterベース)で
+// 比較した結果:
+//   全体          : confidence_score軸127.5% > p_win軸99.5%（confidence_score優位）
+//   不一致12件のみ : confidence_score軸24.0% < p_win軸96.4%（p_win優位、7-2で的中も上回る）
+// 一致ケース(110件、90.2%)はどちらの軸でも同じ馬を選ぶため、
+// 「一致時はconfidence_score軸のまま・不一致時だけp_win軸に切替」という
+// ハイブリッドにすると、一致ケースの実力(138.8%)を損なわず不一致ケースの
+// 改善分だけを上乗せできる。皮算用ROIは127.5%→134.6%。
 function formation9(r){
   if(!r.meets_filter) return null;
-  const evalPool = (r.horses||[]).filter(h=>!h.is_keshi)
-                            .sort((a,b)=>(b.confidence_score||0)-(a.confidence_score||0));
+  const horses = (r.horses||[]).filter(h=>!h.is_keshi);
+  if(!horses.length) return null;
+
+  const confPool = [...horses].sort((a,b)=>(b.confidence_score||0)-(a.confidence_score||0));
+  const pwinPool = [...horses].sort((a,b)=>(b.p_win||0)-(a.p_win||0));
+  const confAxis = confPool[0];
+  const pwinAxis = pwinPool[0];
+
+  // 一致なら従来通りconfidence_score順、不一致ならp_win順のプールを使う
+  const useHybrid = confAxis && pwinAxis && confAxis.umaban !== pwinAxis.umaban;
+  const evalPool = useHybrid ? pwinPool : confPool;
+
   const axisH = evalPool[0];
   const secondH = evalPool.slice(1,4);
   const thirdH  = evalPool.slice(1,5);
   if(!axisH || !secondH.length || !thirdH.length) return null;
-  return { axis: axisH.umaban, second: secondH.map(h=>h.umaban), third: thirdH.map(h=>h.umaban) };
+  return {
+    axis: axisH.umaban, second: secondH.map(h=>h.umaban), third: thirdH.map(h=>h.umaban),
+    axisSwitched: useHybrid,  // UI側で「今回はp_win軸に切り替えた」ことを示せるように
+  };
 }
 
 // 準厳選: 地力差10-15%（厳選=15%以上とは別の帯）×頭数13頭以下。
@@ -636,7 +658,7 @@ function renderHeader(r){
   const sa = shibaAnaFormation(r);
   const ref1418 = atama1418Reference(r);
   const buyHtml = f9
-    ? `<div class="buy-bar yes"><b>★厳選 3連単9点</b> — 1着${f9.axis} → 2着${f9.second.join('/')} → 3着${f9.third.join('/')}</div>`
+    ? `<div class="buy-bar yes"><b>★厳選 3連単9点</b> — 1着${f9.axis} → 2着${f9.second.join('/')} → 3着${f9.third.join('/')}${f9.axisSwitched?' <span style="color:var(--orange);font-size:10px">(単勝率優先で軸切替)</span>':''}</div>`
     : (jfA && jfB)
     ? `<div class="buy-bar yes" style="border-color:var(--blue)">
          <b style="color:var(--blue)">☆準厳選</b><br>
